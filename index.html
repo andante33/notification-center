@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>通知コントロールセンター</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        :root { --primary: #007bff; --success: #28a745; --danger: #dc3545; --dark: #333; --bg: #f0f2f5; }
+        body { font-family: sans-serif; padding: 20px; background: var(--bg); color: var(--dark); margin: 0; }
+        .container { max-width: 600px; margin: 0 auto; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        h2, h3 { margin-top: 0; color: var(--primary); text-align: center; }
+        
+        /* 誘導UI用のスタイル */
+        .pwa-badge { display: none; background: #fff3cd; color: #856404; padding: 12px; border-radius: 8px; margin-bottom: 15px; text-align: center; font-weight: bold; border: 1px solid #ffeeba; }
+        .pwa-btn { background: #ffc107; color: #212529; width: auto; padding: 6px 12px; margin-left: 10px; display: inline-block; border-radius: 4px; }
+
+        /* ダッシュボード */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .dash-box { background: white; padding: 15px; border-radius: 10px; text-align: center; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .dash-val { font-size: 24px; font-weight: bold; color: var(--primary); margin-top: 5px; }
+
+        /* フォーム要素 */
+        input, select, button { width: 100%; padding: 10px; margin: 6px 0; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; font-size: 15px; }
+        button { background: var(--primary); color: white; font-weight: bold; cursor: pointer; border: none; }
+        button:hover { opacity: 0.9; }
+        
+        /* プリセットボタン */
+        .preset-area { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+        .preset-btn { background: #e2e8f0; color: #4a5568; width: auto; padding: 6px 12px; font-size: 13px; margin: 0; }
+
+        /* リスト */
+        .item-list { list-style: none; padding: 0; }
+        .item-box { background: white; padding: 15px; border-radius: 8px; margin-bottom: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); border-left: 5px solid var(--primary); position: relative; }
+        .flex-row { display: flex; justify-content: space-between; align-items: flex-start; }
+        .meta-info { font-size: 13px; color: #666; margin-top: 5px; line-height: 1.5; }
+        .btn-group { display: flex; gap: 5px; margin-top: 10px; }
+        .btn-sm { width: auto; padding: 5px 10px; font-size: 13px; margin: 0; }
+        .btn-danger { background: var(--danger); }
+        .btn-edit { background: #6c757d; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <!-- PWAインストール誘導UI -->
+        <div id="pwa-prompt" class="pwa-badge">
+            📱 アプリとしてホーム画面に追加しませんか？
+            <button id="pwa-install-btn" class="pwa-btn">インストールする</button>
+        </div>
+
+        <!-- ダッシュボード -->
+        <div class="grid">
+            <div class="dash-box"><div>💵 月額 合計</div><div id="total-month" class="dash-val">¥0</div></div>
+            <div class="dash-box"><div>📅 年額 合計</div><div id="total-year" class="dash-val">¥0</div></div>
+        </div>
+
+        <!-- 入力フォーム -->
+        <div class="card">
+            <h2 id="form-title">🔔 サブスクを登録する</h2>
+            
+            <label style="font-size: 13px; color:#666;">人気のサブスクから入力する：</label>
+            <div id="preset-area" class="preset-area"></div>
+
+            <input type="hidden" id="edit-index" value="-1">
+            <input type="text" id="sub-name" placeholder="サービス名（例：Netflix）">
+            
+            <div style="display: flex; gap: 10px;">
+                <input type="number" id="sub-price" placeholder="料金" style="flex: 2;">
+                <select id="sub-cycle" style="flex: 1;">
+                    <option value="month">月額</option>
+                    <option value="year">年額</option>
+                </select>
+            </div>
+
+            <input type="text" id="sub-pay-method" placeholder="支払い方法（例：クレカ、キャリア決済）">
+            <input type="text" id="sub-card-expiry" placeholder="（任意）クレカの有効期限（例：12/28）">
+            
+            <label style="font-size: 13px; display:block; margin-top:6px;">次回更新日（この日時に通知されます）：</label>
+            <input type="datetime-local" id="sub-time">
+            
+            <button id="save-btn">保存する</button>
+            <button id="cancel-btn" style="background:#6c757d; display:none;">キャンセル</button>
+        </div>
+
+        <!-- 一覧表示 -->
+        <h3>📋 契約中のサブスク一覧</h3>
+        <ul id="item-list" class="item-list"></ul>
+    </div>
+    <script>
+        // プリセットデータの置き場
+        const PRESET_SERVICES = [
+            { name: "Netflix", price: 1490, cycle: "month", method: "クレジットカード" },
+            { name: "Amazon Prime", price: 600, cycle: "month", method: "クレジットカード" },
+            { name: "YouTube Premium", price: 1280, cycle: "month", method: "キャリア決済" }
+        ];
+
+        // Service Workerの登録
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/notification-center/sw.js', { scope:'/notification-center/'}).then(() => console.log("SW Registered"));
+        }
+
+        // データの読み込み
+        let subscriptions = JSON.parse(localStorage.getItem('subscriptions')) || [];
+
+        const saveBtn = document.getElementById('save-btn');
+        const cancelBtn = document.getElementById('cancel-btn');
+        const itemList = document.getElementById('item-list');
+        const pwaPrompt = document.getElementById('pwa-prompt');
+
+        // プリセットボタンの自動生成
+        const presetArea = document.getElementById('preset-area');
+        PRESET_SERVICES.forEach(service => {
+            const btn = document.createElement('button');
+            btn.className = 'preset-btn';
+            btn.innerText = `＋ ${service.name}`;
+            btn.addEventListener('click', () => {
+                document.getElementById('sub-name').value = service.name;
+                document.getElementById('sub-price').value = service.price;
+                document.getElementById('sub-cycle').value = service.cycle;
+                document.getElementById('sub-pay-method').value = service.method;
+            });
+            presetArea.appendChild(btn);
+        });
+
+        // 画面の更新（一覧表示 ＆ ダッシュボード計算）
+        function renderApp() {
+            itemList.innerHTML = '';
+            let totalMonth = 0;
+            let totalYear = 0;
+
+            subscriptions.forEach((item, index) => {
+                const price = Number(item.price) || 0;
+                if (item.cycle === 'month') {
+                    totalMonth += price;
+                    totalYear += (price * 12);
+                } else {
+                    totalMonth += Math.round(price / 12);
+                    totalYear += price;
+                }
+
+                const li = document.createElement('li');
+                li.className = 'item-box';
+                const dateText = item.time ? new Date(item.time).toLocaleString('ja-JP') : '未設定';
+                
+                li.innerHTML = `
+                    <div class="flex-row">
+                        <div>
+                            <strong style="font-size:18px;">${item.name}</strong> 
+                            <span style="color:var(--primary); font-weight:bold;">¥${Number(item.price).toLocaleString()} / ${item.cycle === 'month' ? '月' : '年'}</span>
+                            <div class="meta-info">
+                                💳 決済方法: ${item.method || '未登録'} ${item.expiry ? `(期限: \${item.expiry})` : ''}<br>
+                                🔔 次回更新: ${dateText}
+                            </div>
+                        </div>
+                    </div>
+                    <div class="btn-group">
+                        <button class="btn-sm btn-edit" onclick="editItem(${index})">編集</button>
+                        <button class="btn-sm btn-danger" onclick="deleteItem(${index})">削除</button>
+                    </div>
+                `;
+                itemList.appendChild(li);
+            });
+
+            document.getElementById('total-month').innerText = `¥${totalMonth.toLocaleString()}`;
+            document.getElementById('total-year').innerText = `¥${totalYear.toLocaleString()}`;
+
+            localStorage.setItem('subscriptions', JSON.stringify(subscriptions));
+            setupNotificationTimers();
+        }
+        // 保存（新規登録・編集保存）
+        saveBtn.addEventListener('click', () => {
+            const index = Number(document.getElementById('edit-index').value);
+            const data = {
+                name: document.getElementById('sub-name').value,
+                price: document.getElementById('sub-price').value,
+                cycle: document.getElementById('sub-cycle').value,
+                method: document.getElementById('sub-pay-method').value,
+                expiry: document.getElementById('sub-card-expiry').value,
+                time: document.getElementById('sub-time').value
+            };
+
+            if (!data.name || !data.price) {
+                alert('サービス名と料金は必須です！');
+                return;
+            }
+
+            if (index === -1) {
+                subscriptions.push(data);
+            } else {
+                subscriptions[index] = data;
+                resetForm();
+            }
+
+            renderApp();
+            ['sub-name', 'sub-price', 'sub-pay-method', 'sub-card-expiry', 'sub-time'].forEach(id => document.getElementById(id).value = '');
+        });
+
+        // 編集モードに入る処理
+        window.editItem = function(index) {
+            const item = subscriptions[index];
+            document.getElementById('form-title').innerText = "✏️ サブスク情報を編集する";
+            document.getElementById('edit-index').value = index;
+            document.getElementById('sub-name').value = item.name;
+            document.getElementById('sub-price').value = item.price;
+            document.getElementById('sub-cycle').value = item.cycle;
+            document.getElementById('sub-pay-method').value = item.method || '';
+            document.getElementById('sub-card-expiry').value = item.expiry || '';
+            document.getElementById('sub-time').value = item.time || '';
+            
+            saveBtn.innerText = "変更を保存";
+            cancelBtn.style.display = 'block';
+        };
+
+        function resetForm() {
+            document.getElementById('form-title').innerText = "🔔 サブスクを登録する";
+            document.getElementById('edit-index').value = "-1";
+            saveBtn.innerText = "保存する";
+            cancelBtn.style.display = 'none';
+        }
+        cancelBtn.addEventListener('click', resetForm);
+
+        // 削除
+        window.deleteItem = function(index) {
+            if(confirm('本当に削除しますか？')) {
+                subscriptions.splice(index, 1);
+                renderApp();
+            }
+        };
+
+        // 通知タイマーのセット
+        let activeTimers = [];
+        function setupNotificationTimers() {
+            activeTimers.forEach(t => clearTimeout(t));
+            activeTimers = [];
+
+            subscriptions.forEach(item => {
+                if(!item.time) return;
+                const diff = new Date(item.time).getTime() - new Date().getTime();
+                if (diff > 0) {
+                    const timer = setTimeout(() => {
+                        navigator.serviceWorker.ready.then(reg => {
+                            reg.showNotification(`${item.name} の更新日です！`, {
+                                body: `料金 ¥${Number(item.price).toLocaleString()} の支払いが発生します。`,
+                                icon: 'icon.png'
+                            });
+                        });
+                    }, diff);
+                    activeTimers.push(timer);
+                }
+            });
+        }
+
+        // PWA インストール誘導
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            pwaPrompt.style.display = 'block';
+        });
+
+        document.getElementById('pwa-install-btn').addEventListener('click', () => {
+            if (!deferredPrompt) return;
+            pwaPrompt.style.display = 'none';
+            deferredPrompt.prompt();
+            deferredPrompt.userChoice.then(() => { deferredPrompt = null; });
+        });
+
+        renderApp();
+    </script>
+</body>
+</html>
